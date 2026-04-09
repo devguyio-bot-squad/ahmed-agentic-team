@@ -1,0 +1,55 @@
+// Story workflow state machine
+// Statuses: eng:qe:test-design, eng:dev:implement, eng:dev:code-review,
+//           eng:qe:verify, eng:arch:sign-off, snt:gate:merge, done
+
+digraph story {
+    rankdir=LR;
+    graph [fontname="Helvetica", bgcolor="transparent"];
+    node [fontname="Helvetica", style="filled", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // Engineer Developer hat (green)
+    node [fillcolor="#6EE7B7", color="#065F46", shape=box];
+    "eng:dev:implement";
+    "eng:dev:code-review";
+
+    // Engineer QE hat (cyan)
+    node [fillcolor="#67E8F9", color="#155E75", shape=box];
+    "eng:qe:test-design";
+    "eng:qe:verify";
+
+    // Engineer Architect hat (indigo)
+    node [fillcolor="#A5B4FC", color="#4338CA", shape=box];
+    "eng:arch:sign-off";
+
+    // Sentinel (red — merge gate)
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=hexagon];
+    "snt:gate:merge" [label="snt:gate:merge\n(SENTINEL)"];
+
+    // Terminal (done)
+    node [fillcolor="#D1D5DB", color="#374151", shape=doublecircle];
+    "done";
+
+    // Error
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=box];
+    "error";
+
+    // --- Happy path transitions ---
+    "eng:qe:test-design" -> "eng:dev:implement" [label="tests designed"];
+    "eng:dev:implement" -> "eng:dev:code-review" [label="implementation done"];
+    "eng:dev:code-review" -> "eng:qe:verify" [label="code approved"];
+    "eng:qe:verify" -> "eng:arch:sign-off" [label="verified"];
+    "eng:arch:sign-off" -> "snt:gate:merge" [label="auto-advance"];
+    "snt:gate:merge" -> "done" [label="merged"];
+
+    // --- Rejection loop (sentinel rejects) ---
+    "snt:gate:merge" -> "eng:dev:implement" [label="rejected", style=dashed, color="#DC2626", fontcolor="#DC2626"];
+
+    // --- Error transitions (any non-terminal -> error) ---
+    "eng:qe:test-design" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:dev:implement" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:dev:code-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:qe:verify" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:sign-off" -> "error" [style=dotted, color="#9CA3AF"];
+    "snt:gate:merge" -> "error" [style=dotted, color="#9CA3AF"];
+}

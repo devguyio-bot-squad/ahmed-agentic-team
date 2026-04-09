@@ -1,0 +1,81 @@
+// Epic workflow state machine
+// Statuses: eng:po:triage, eng:po:backlog, eng:arch:design, eng:lead:design-review,
+//           human:po:design-review, eng:arch:plan, eng:lead:plan-review,
+//           human:po:plan-review, eng:arch:breakdown, eng:lead:breakdown-review,
+//           eng:po:ready, eng:arch:in-progress, human:po:accept, done
+
+digraph epic {
+    rankdir=LR;
+    graph [fontname="Helvetica", bgcolor="transparent"];
+    node [fontname="Helvetica", style="filled", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // --- Role colors ---
+    // Engineer PO hat (amber)
+    node [fillcolor="#FCD34D", color="#B45309"];
+    "eng:po:triage";
+    "eng:po:backlog";
+    "eng:po:ready";
+
+    // Human gates (amber, octagon = human decision)
+    node [fillcolor="#FCD34D", color="#B45309", shape=octagon];
+    "human:po:design-review" [label="human:po:design-review\n(GATE)"];
+    "human:po:plan-review" [label="human:po:plan-review\n(GATE)"];
+    "human:po:accept" [label="human:po:accept\n(GATE)"];
+
+    // Engineer Architect hat (indigo)
+    node [fillcolor="#A5B4FC", color="#4338CA", shape=box];
+    "eng:arch:design";
+    "eng:arch:plan";
+    "eng:arch:breakdown";
+    "eng:arch:in-progress";
+
+    // Engineer Lead hat (purple)
+    node [fillcolor="#C4B5FD", color="#6D28D9", shape=box];
+    "eng:lead:design-review";
+    "eng:lead:plan-review";
+    "eng:lead:breakdown-review";
+
+    // Terminal (done)
+    node [fillcolor="#D1D5DB", color="#374151", shape=doublecircle];
+    "done";
+
+    // Error
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=box];
+    "error";
+
+    // --- Happy path transitions ---
+    "eng:po:triage" -> "eng:po:backlog" [label="accept"];
+    "eng:po:backlog" -> "eng:arch:design" [label="activate"];
+    "eng:arch:design" -> "eng:lead:design-review" [label="submit"];
+    "eng:lead:design-review" -> "human:po:design-review" [label="approved"];
+    "human:po:design-review" -> "eng:arch:plan" [label="approved"];
+    "eng:arch:plan" -> "eng:lead:plan-review" [label="submit"];
+    "eng:lead:plan-review" -> "human:po:plan-review" [label="approved"];
+    "human:po:plan-review" -> "eng:arch:breakdown" [label="approved"];
+    "eng:arch:breakdown" -> "eng:lead:breakdown-review" [label="submit"];
+    "eng:lead:breakdown-review" -> "eng:po:ready" [label="approved"];
+    "eng:po:ready" -> "eng:arch:in-progress" [label="activate"];
+    "eng:arch:in-progress" -> "human:po:accept" [label="stories done"];
+    "human:po:accept" -> "done" [label="approved"];
+
+    // --- Rejection loops (dashed red) ---
+    "human:po:design-review" -> "eng:arch:design" [label="rejected", style=dashed, color="#DC2626", fontcolor="#DC2626"];
+    "human:po:plan-review" -> "eng:arch:plan" [label="rejected", style=dashed, color="#DC2626", fontcolor="#DC2626"];
+    "human:po:accept" -> "eng:arch:in-progress" [label="rejected", style=dashed, color="#DC2626", fontcolor="#DC2626"];
+
+    // --- Error transitions (any non-terminal -> error) ---
+    "eng:po:triage" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:po:backlog" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:design" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:lead:design-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "human:po:design-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:plan" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:lead:plan-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "human:po:plan-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:breakdown" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:lead:breakdown-review" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:po:ready" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:in-progress" -> "error" [style=dotted, color="#9CA3AF"];
+    "human:po:accept" -> "error" [style=dotted, color="#9CA3AF"];
+}

@@ -1,0 +1,146 @@
+name: agentic-sdlc-minimal
+display_name: Agentic SDLC Minimal
+description: 'Minimal agentic software lifecycle with three roles: engineer (full SDLC), sentinel (merge gatekeeper), and chief-of-staff (operator''s AI assistant).'
+version: '1.0.0'
+schema_version: '1.0'
+roles:
+- name: engineer
+  description: Full SDLC engineer — PO, architect, dev, QE, SRE, and content writer in one member
+- name: chief-of-staff
+  description: The operator's chief of staff — handles operational tasks, reviews member activity, and drives improvements
+- name: sentinel
+  description: PR merge gatekeeper and orphaned PR triage
+labels:
+- name: kind/docs
+  color: '0075CA'
+  description: Label modifier — routes any issue type to content writer hats
+- name: role/chief-of-staff
+  color: '5319E7'
+  description: Assigned to chief of staff
+- name: role/sentinel
+  color: B60205
+  description: Assigned to sentinel
+- name: project/<project>
+  color: '0E8A16'
+  description: Associates issue with a project (template — actual label uses project name)
+statuses:
+- name: eng:po:triage
+  description: New epic, awaiting evaluation
+- name: eng:po:backlog
+  description: Accepted, prioritized, awaiting activation
+- name: eng:arch:design
+  description: Engineer (architect hat) producing design doc
+- name: eng:lead:design-review
+  description: Engineer (lead hat) reviewing design doc
+- name: human:po:design-review
+  description: Design doc awaiting human review
+- name: eng:arch:plan
+  description: Engineer (architect hat) proposing story breakdown
+- name: eng:lead:plan-review
+  description: Engineer (lead hat) reviewing story breakdown
+- name: human:po:plan-review
+  description: Story breakdown awaiting human review (also used for complex bugs)
+- name: eng:arch:breakdown
+  description: Engineer (architect hat) creating story issues
+- name: eng:lead:breakdown-review
+  description: Engineer (lead hat) reviewing story issues
+- name: eng:po:ready
+  description: Stories created, epic in ready backlog
+- name: eng:arch:in-progress
+  description: Engineer (architect hat) monitoring story execution
+- name: human:po:accept
+  description: Epic awaiting human acceptance
+- name: done
+  description: Complete
+- name: eng:qe:test-design
+  description: Engineer (QE hat) designing tests
+- name: eng:dev:implement
+  description: Engineer (developer hat) implementing
+- name: eng:dev:code-review
+  description: Engineer (code reviewer hat) reviewing code
+- name: eng:qe:verify
+  description: Engineer (QE hat) verifying implementation (also used for bug verification)
+- name: eng:arch:sign-off
+  description: Engineer (architect hat) sign-off (auto-advance to sentinel)
+- name: snt:gate:merge
+  description: Sentinel running merge gates on PR
+- name: eng:bug:investigate
+  description: Engineer (QE hat) investigating bug, determines simple vs complex
+- name: eng:arch:review
+  description: Engineer (architect hat) reviewing simple bug fix, can approve or escalate
+- name: eng:arch:refine
+  description: Engineer (architect hat) reviewing/refining complex bug plan
+- name: eng:bug:breakdown
+  description: Engineer (architect hat) creating subtasks for complex bug
+- name: eng:bug:in-progress
+  description: Monitoring subtask completion
+- name: eng:sre:infra-setup
+  description: Engineer (SRE hat) infrastructure setup
+- name: eng:cw:write
+  description: Engineer (content writer hat) writing
+- name: eng:cw:review
+  description: Engineer (content reviewer hat) reviewing
+- name: cos:exec:todo
+  description: Task awaiting chief of staff
+- name: cos:exec:in-progress
+  description: Chief of staff working on task
+- name: cos:exec:done
+  description: Task completed by chief of staff
+- name: error
+  description: Issue failed processing 3 times
+projects:
+- name: hypershift
+  fork_url: https://github.com/devguyio-bot-squad/hypershift.git
+- name: botminter
+  fork_url: https://github.com/devguyio-bot-squad/botminter.git
+views:
+- name: Engineer
+  prefixes:
+  - eng
+  also_include:
+  - done
+  - error
+- name: Human Gates
+  prefixes:
+  - human
+  also_include:
+  - done
+  - error
+- name: Sentinel
+  prefixes:
+  - snt
+  also_include:
+  - done
+  - error
+- name: Chief of Staff
+  prefixes:
+  - cos
+  also_include:
+  - done
+  - error
+coding_agents:
+  claude-code:
+    name: claude-code
+    display_name: Claude Code
+    context_file: CLAUDE.md
+    agent_dir: '.claude'
+    binary: claude
+    system_prompt_flag: '--append-system-prompt-file'
+    skip_permissions_flag: '--dangerously-skip-permissions'
+default_coding_agent: claude-code
+bridges:
+- name: tuwunel
+  display_name: Matrix (Tuwunel)
+  description: Matrix bridge via Tuwunel homeserver (local Podman container)
+  type: local
+- name: telegram
+  display_name: Telegram
+  description: Telegram Bot API for team communication
+  type: external
+- name: rocketchat
+  display_name: Rocket.Chat
+  description: Rocket.Chat bridge for team communication (local Podman Pod)
+  type: local
+bridge: tuwunel
+operator:
+  bridge_username: bmadmin

@@ -1,0 +1,63 @@
+// Bug workflow state machine (two-track: simple + complex)
+// Statuses: eng:bug:investigate, eng:arch:review, eng:arch:refine,
+//           human:po:plan-review, eng:bug:breakdown, eng:bug:in-progress,
+//           eng:qe:verify, done
+
+digraph bug {
+    rankdir=LR;
+    graph [fontname="Helvetica", bgcolor="transparent"];
+    node [fontname="Helvetica", style="filled", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // Bug-specific (red)
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=box];
+    "eng:bug:investigate";
+    "eng:bug:breakdown";
+    "eng:bug:in-progress";
+
+    // Engineer Architect hat (indigo)
+    node [fillcolor="#A5B4FC", color="#4338CA", shape=box];
+    "eng:arch:review";
+    "eng:arch:refine";
+
+    // Human gate (amber) — shared with epic workflow
+    node [fillcolor="#FCD34D", color="#B45309", shape=diamond];
+    "human:po:plan-review";
+
+    // Engineer QE hat (cyan) — shared with story workflow
+    node [fillcolor="#67E8F9", color="#155E75", shape=box];
+    "eng:qe:verify";
+
+    // Terminal (done)
+    node [fillcolor="#D1D5DB", color="#374151", shape=doublecircle];
+    "done";
+
+    // Error
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=box];
+    "error";
+
+    // --- Simple track (fast path) ---
+    "eng:bug:investigate" -> "eng:arch:review" [label="simple fix"];
+    "eng:arch:review" -> "eng:qe:verify" [label="approved"];
+    "eng:qe:verify" -> "done" [label="verified"];
+
+    // --- Complex track (full planning) ---
+    "eng:bug:investigate" -> "eng:arch:refine" [label="complex plan"];
+    "eng:arch:refine" -> "human:po:plan-review" [label="plan ready"];
+    "human:po:plan-review" -> "eng:bug:breakdown" [label="approved"];
+    "eng:bug:breakdown" -> "eng:bug:in-progress" [label="subtasks created"];
+    "eng:bug:in-progress" -> "eng:qe:verify" [label="all subtasks done"];
+
+    // --- Rejection / escalation loops ---
+    "eng:arch:review" -> "eng:arch:refine" [label="escalate", style=dashed, color="#B91C1C"];
+    "human:po:plan-review" -> "eng:arch:refine" [label="rejected", style=dashed, color="#B91C1C"];
+    "eng:qe:verify" -> "eng:bug:investigate" [label="simple fail", style=dashed, color="#B91C1C"];
+    "eng:qe:verify" -> "eng:bug:in-progress" [label="complex fail", style=dashed, color="#B91C1C"];
+
+    // --- Error transitions ---
+    "eng:bug:investigate" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:review" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:arch:refine" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:bug:breakdown" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:bug:in-progress" -> "error" [style=dotted, color="#9CA3AF"];
+}

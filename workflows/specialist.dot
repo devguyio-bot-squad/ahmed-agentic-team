@@ -1,0 +1,58 @@
+// Specialist workflow state machines (SRE + Content Writing)
+// Statuses: eng:sre:infra-setup, eng:cw:write, eng:cw:review, done
+
+digraph specialist {
+    rankdir=LR;
+    graph [fontname="Helvetica", bgcolor="transparent"];
+    node [fontname="Helvetica", style="filled", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // --- SRE subgraph ---
+    subgraph cluster_sre {
+        label="SRE";
+        style="dashed";
+        color="#9CA3AF";
+        fontname="Helvetica";
+
+        // SRE (orange)
+        node [fillcolor="#FDBA74", color="#9A3412", shape=box];
+        "eng:sre:infra-setup";
+
+        // Terminal (done — SRE)
+        node [fillcolor="#D1D5DB", color="#374151", shape=doublecircle];
+        "done (sre)" [label="done"];
+    }
+
+    // --- Content Writing subgraph ---
+    subgraph cluster_cw {
+        label="Content Writing";
+        style="dashed";
+        color="#9CA3AF";
+        fontname="Helvetica";
+
+        // CW (pink)
+        node [fillcolor="#F9A8D4", color="#9D174D", shape=box];
+        "eng:cw:write";
+        "eng:cw:review";
+
+        // Terminal (done — CW)
+        node [fillcolor="#D1D5DB", color="#374151", shape=doublecircle];
+        "done (cw)" [label="done"];
+    }
+
+    // Error
+    node [fillcolor="#FCA5A5", color="#B91C1C", shape=box];
+    "error";
+
+    // --- SRE transitions ---
+    "eng:sre:infra-setup" -> "done (sre)" [label="complete"];
+
+    // --- CW transitions ---
+    "eng:cw:write" -> "eng:cw:review" [label="draft ready"];
+    "eng:cw:review" -> "done (cw)" [label="approved"];
+
+    // --- Error transitions ---
+    "eng:sre:infra-setup" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:cw:write" -> "error" [style=dotted, color="#9CA3AF"];
+    "eng:cw:review" -> "error" [style=dotted, color="#9CA3AF"];
+}
