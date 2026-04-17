@@ -60,15 +60,110 @@ GetControlPlaneOperatorImage()
              Calls ExtractImageFiles(image="acr.io/...") -> SUCCESS
 ```
 
+### Systemic Gap Analysis
+
+Implementation audit revealed that the `RegistryMirrorProviderDecorator.Lookup()` fix alone is **necessary but not sufficient** for the AKS + nightly scenario. The `--registry-overrides` mechanism has gaps across multiple code paths. These gaps do NOT affect ICSP/IDMS because that mechanism was designed later (April 2023 vs. November 2021) with correct override-before-access patterns from the start.
+
+#### Why ICSP/IDMS Is Not Affected
+
+The two override mechanisms are wired differently:
+
+- **ICSP/IDMS** was built as a **two-pronged mechanism**: (1) `ProviderWithOpenShiftImageRegistryOverridesDecorator.Lookup()` applies overrides to the image *before* delegating in the release info path, and (2) `RegistryClientImageMetadataProvider` has its own `OpenShiftImageRegistryOverrides` field with every method calling `SeekOverride()` before registry access.
+
+- **`--registry-overrides`** was only built into the release info path via `RegistryMirrorProviderDecorator`, and even there it was applied *after* the delegate call (to tags only). It was **never added** to `RegistryClientImageMetadataProvider`. Three components (CPO, HCCO, karpenter-operator) noticed this gap and worked around it by merging `--registry-overrides` values into the ICSP/IDMS-style `map[string][]string` — effectively abandoning the native mechanism and piggybacking on the ICSP/IDMS path. But this workaround only covers scenarios where ICSP/IDMS infrastructure is available.
+
+#### Finding 1: `DetermineHostedClusterPayloadArch` — FATAL
+
+**File:** `hypershift-operator/controllers/hostedcluster/hostedcluster_controller.go:1213`
+
+`DetermineHostedClusterPayloadArch` calls `registryclient.IsMultiArchManifestList(ctx, hc.Spec.Release.Image, ...)` which passes the raw image through `RegistryClientImageMetadataProvider.GetManifest()`. This calls `SeekOverride()` for ICSP/IDMS but has no mechanism for `--registry-overrides`. On failure, the reconciler sets `ValidReleaseImage=False` and **returns the error** (line 1224), halting reconciliation entirely. **This blocks cluster creation before the `GetControlPlaneOperatorImage` fix is even reached.**
+
+- **ICSP/IDMS:** Protected — `GetManifest()` calls `SeekOverride()` at `imagemetadata.go:262`
+- **`--registry-overrides`:** Broken — `RegistryClientImageMetadataProvider` has no field for it
+
+#### Finding 2: `GetDigest` for Progressing Condition — Operationally Fatal
+
+**File:** `hypershift-operator/controllers/hostedcluster/hostedcluster_controller.go:1243`
+
+`registryClientImageMetadataProvider.GetDigest(ctx, hcluster.Spec.Release.Image, pullSecretBytes)` passes the raw image. When this fails, the Progressing condition is set to `Reason: Blocked` permanently — monitoring alerts fire, upgrade orchestration stalls.
+
+- **ICSP/IDMS:** Protected — `GetDigest()` calls `SeekOverride()` at `imagemetadata.go:216`
+- **`--registry-overrides`:** Broken — same root cause as Finding 1
+
+#### Finding 3: Karpenter Controller — FATAL (Neither Mechanism)
+
+**File:** `karpenter-operator/main.go:130`
+
+`ReleaseProvider: &releaseinfo.RegistryClientProvider{}` — a bare provider with **zero decorators**. Neither ICSP/IDMS nor `--registry-overrides` are applied. The `--registry-overrides` flag IS accepted (line 67) but never wired to this provider.
+
+- **ICSP/IDMS:** Also broken — no decorator chain at all
+- **`--registry-overrides`:** Broken — no decorator chain at all
+
+#### Finding 4: Karpenter Ignition Controller — Broken Natively
+
+**File:** `karpenter-operator/main.go:161-172`
+
+The decorator chain has `RegistryOverrides: nil` on the inner `RegistryMirrorProviderDecorator`. The `--registry-overrides` flag values are merged into `imageRegistryOverrides` (the ICSP/IDMS-style `map[string][]string`, lines 154-159) instead of being wired to the inner decorator. This means `--registry-overrides` only works through the ICSP/IDMS path (outer decorator with mirror probing semantics), not through the native string-replacement path.
+
+- **ICSP/IDMS:** Protected — outer decorator applies overrides including the merged flag values
+- **`--registry-overrides`:** Broken natively — inner decorator receives `nil`, flag values are rerouted through ICSP/IDMS semantics
+
+#### Finding 5: `RegistryClientImageMetadataProvider` — Systemic Root Cause
+
+**File:** `support/util/imagemetadata.go:115-119`
+
+The struct has `OpenShiftImageRegistryOverrides map[string][]string` but **no field for `--registry-overrides`** (`map[string]string`). Every method (`ImageMetadata`, `GetOverride`, `GetDigest`, `GetManifest`, `GetMetadata`) calls `SeekOverride()` which only processes ICSP/IDMS entries. This is the root cause of Findings 1 and 2 — any caller that resolves images through the metadata provider bypasses `--registry-overrides` entirely.
+
+- **ICSP/IDMS:** Protected by design — every method calls `SeekOverride()`
+- **`--registry-overrides`:** Not supported at all
+
+#### Impact Matrix
+
+| Code Path | Component | `--registry-overrides` | ICSP/IDMS | Severity |
+|-----------|-----------|----------------------|-----------|----------|
+| `Lookup()` (release info) | HO HC Reconciler | **Fixed** (decorator fix) | Works | Resolved |
+| `DetermineHostedClusterPayloadArch` | HO HC Reconciler | **Broken** — no metadata support | Works | FATAL — blocks before fix is reached |
+| `GetDigest` for Progressing | HO HC Reconciler | **Broken** — no metadata support | Works | Operationally fatal |
+| Karpenter controller `Lookup` | Karpenter Operator | **Broken** — bare provider | **Also broken** | FATAL |
+| Karpenter ignition `Lookup` | Karpenter Operator | Broken natively (`nil`) | Works (via workaround) | Broken on non-OpenShift |
+| NodePool reconciler (all paths) | HO NodePool Reconciler | Works | Works | OK |
+| CPO `cpReleaseProvider` | CPO | Works | Works | OK |
+| CPO `userReleaseProvider` | CPO | `nil` (intentional) | Works | OK (by design) |
+| Ignition server | Ignition Server | Works | Works | OK |
+
 ---
 
 ## Components and Interfaces
 
-### Modified Component
+### Modified Components
 
-**`RegistryMirrorProviderDecorator.Lookup()`** — `support/releaseinfo/registry_mirror_provider.go:26-46`
+#### Fix 1: `RegistryMirrorProviderDecorator.Lookup()` — `support/releaseinfo/registry_mirror_provider.go:26-46`
 
-This is the only function that needs modification. The fix applies `RegistryOverrides` string replacement to the `image` parameter **before** calling `p.Delegate.Lookup()`, in addition to the existing post-processing of component image tags.
+Apply `RegistryOverrides` string replacement to the `image` parameter **before** calling `p.Delegate.Lookup()`, in addition to the existing post-processing of component image tags.
+
+#### Fix 2: `RegistryClientImageMetadataProvider` — `support/util/imagemetadata.go:115-119`
+
+Add a `RegistryOverrides map[string]string` field. Apply simple string replacement to the image reference **before** calling `SeekOverride()` in each method (`ImageMetadata`, `GetOverride`, `GetDigest`, `GetManifest`, `GetMetadata`). This ensures `--registry-overrides` is applied in the image metadata path, resolving Findings 1 and 2.
+
+#### Fix 3: Karpenter controller wiring — `karpenter-operator/main.go:127-131`
+
+Replace the bare `&releaseinfo.RegistryClientProvider{}` with the full decorator chain, matching the pattern already used for the karpenter ignition controller at lines 161-172. This resolves Finding 3.
+
+#### Fix 4: Karpenter ignition controller wiring — `karpenter-operator/main.go:169`
+
+Wire `registryOverrides` to `RegistryMirrorProviderDecorator.RegistryOverrides` instead of (or in addition to) merging into the ICSP/IDMS map. This resolves Finding 4.
+
+#### Fix 5: `RegistryClientImageMetadataProvider` wiring — all instantiation sites
+
+Pass `registryOverrides` to the new `RegistryOverrides` field on `RegistryClientImageMetadataProvider` at each instantiation site:
+
+| Site | File | Current | Fix |
+|------|------|---------|-----|
+| HO | `support/globalconfig/imagecontentsource.go:251` | ICSP/IDMS only | Add `RegistryOverrides: registryOverrides` |
+| Karpenter | `karpenter-operator/main.go:174` | ICSP/IDMS only | Add `RegistryOverrides: registryOverrides` |
+| CPO | `control-plane-operator/main.go:479` | ICSP/IDMS only | Add `RegistryOverrides: registryOverrides` |
+| HCCO | `hostedclusterconfigoperator/cmd.go:277` | ICSP/IDMS only | Add `RegistryOverrides: registryOverrides` |
+| Ignition server | `ignition-server/cmd/start.go:155` | ICSP/IDMS only | Add `RegistryOverrides: registryOverrides` |
 
 ### Interface Contracts (Unchanged)
 
@@ -89,14 +184,14 @@ All callers using the full decorator chain benefit from the fix transparently:
 | HAProxy reconciler | `haproxy.go:66` | Full decorator chain |
 | HostedClusterSizing reconciler | `hostedclustersizing_controller.go:76` | Full decorator chain |
 
-### Direct `RegistryClientProvider` Usages (Same Bug Class — Out of Scope)
+### Direct `RegistryClientProvider` Usages
 
-The following callers instantiate `RegistryClientProvider` directly, bypassing the decorator chain entirely. They suffer from the same class of bug (no registry overrides applied) but are out of scope for this epic, which targets the decorator chain fix.
+The following callers instantiate `RegistryClientProvider` directly, bypassing the decorator chain entirely.
 
 | Caller | File | Risk | Scope Decision |
 |--------|------|------|----------------|
-| karpenter-operator Reconciler | `karpenter-operator/main.go:130` | **Production** — same bug on nightly releases | Out of scope — follow-up issue required |
-| `hypershift create nodepool` CLI | `cmd/nodepool/core/create.go:82` | **Production** — CLI validation path | Out of scope — follow-up issue required |
+| karpenter-operator Reconciler | `karpenter-operator/main.go:130` | **Production** — same bug on nightly releases | **In scope** — Fix 3 wraps in decorator chain |
+| `hypershift create nodepool` CLI | `cmd/nodepool/core/create.go:82` | **Production** — CLI validation path | Out of scope — follow-up issue |
 | NodePool upgrade E2E test | `test/e2e/nodepool_upgrade_test.go:166` | Low — test infra | Out of scope |
 | Karpenter E2E test | `test/e2e/karpenter_test.go:481` | Low — test infra | Out of scope |
 | Karpenter CP upgrade E2E test | `test/e2e/karpenter_control_plane_upgrade_test.go:56` | Low — test infra | Out of scope |
@@ -104,8 +199,6 @@ The following callers instantiate `RegistryClientProvider` directly, bypassing t
 | E2E util | `test/e2e/util/util.go:3936` | Low — test infra | Out of scope |
 
 **Note:** The karpenter-operator file has *two* `RegistryClientProvider` usages — line 130 (direct, no decorators) and line 165 (properly wrapped in the full chain). Only the direct usage at line 130 is affected.
-
-**Follow-up:** A separate issue should be filed to wrap the two production-path direct usages (`karpenter-operator/main.go:130` and `cmd/nodepool/core/create.go:82`) in the decorator chain. The E2E test usages are lower priority as they run in controlled environments with direct registry access.
 
 ### Reference: Existing Override Pattern
 
@@ -200,19 +293,57 @@ With the override applied, the registry client connects to the mirror registry (
 **When** an override matches and the image reference is rewritten before delegation
 **Then** an INFO-level log line is emitted showing the original image and the overridden image, matching the logging pattern established by `ProviderWithOpenShiftImageRegistryOverridesDecorator` (which logs at `registry_image_content_policies.go:42`)
 
+### AC8: Image metadata path supports `--registry-overrides`
+
+**Given** `RegistryClientImageMetadataProvider` configured with `--registry-overrides` mapping `quay.io/openshift-release-dev/ocp-release-nightly` to an accessible mirror
+**When** `ImageMetadata()`, `GetDigest()`, or `GetManifest()` is called with a nightly release image
+**Then** the override is applied to the image reference before registry access, and the call succeeds against the mirror
+
+### AC9: `DetermineHostedClusterPayloadArch` succeeds on non-OpenShift clusters
+
+**Given** a non-OpenShift management cluster with `--registry-overrides` configured for nightly images
+**When** a HostedCluster is created with a nightly OCP release
+**Then** `DetermineHostedClusterPayloadArch` resolves the payload architecture successfully without `ValidReleaseImage=False`
+
+### AC10: Karpenter controller uses decorator chain
+
+**Given** the karpenter-operator configured with `--registry-overrides`
+**When** the karpenter controller reconciles a HostedControlPlane with a nightly release
+**Then** the `ReleaseProvider.Lookup()` call applies registry overrides (not bare `RegistryClientProvider`)
+
+### AC11: Karpenter ignition controller wires `--registry-overrides` natively
+
+**Given** the karpenter-operator configured with `--registry-overrides`
+**When** the karpenter ignition controller processes a release image lookup
+**Then** `RegistryMirrorProviderDecorator.RegistryOverrides` is populated (not `nil`) and overrides are applied via native string replacement
+
 ---
 
 ## Impact on Existing System
 
-### Minimal Blast Radius
+### Blast Radius
 
-The change is confined to a single function: `RegistryMirrorProviderDecorator.Lookup()` in `support/releaseinfo/registry_mirror_provider.go`. No interface changes, no new dependencies, no configuration changes.
+The changes span two support packages and three wiring sites:
+
+| Change | Files | Nature |
+|--------|-------|--------|
+| Fix 1: `RegistryMirrorProviderDecorator.Lookup()` | 1 file | Behavioral — apply override before delegation |
+| Fix 2: `RegistryClientImageMetadataProvider` | 1 file | Structural — add `RegistryOverrides` field, apply in 5 methods |
+| Fix 3: Karpenter controller wiring | 1 file | Wiring — replace bare provider with decorator chain |
+| Fix 4: Karpenter ignition wiring | 1 file | Wiring — populate `RegistryOverrides` field |
+| Fix 5: Metadata provider wiring | 5 files | Wiring — pass `registryOverrides` to metadata provider |
+
+No interface changes, no new dependencies, no configuration changes. The `RegistryClientImageMetadataProvider` struct gains one new field — existing callers that don't set it get the zero value (`nil`), preserving current behavior.
 
 ### Behavioral Changes
 
 | Scenario | Before | After |
 |----------|--------|-------|
 | Nightly release + `--registry-overrides` + non-OpenShift cluster | **FAILS** — pulls from original registry | **WORKS** — pulls from mirror |
+| Payload arch detection + `--registry-overrides` + non-OpenShift | **FAILS** — `ValidReleaseImage=False`, reconciliation halted | **WORKS** — metadata provider applies override |
+| GetDigest for Progressing + `--registry-overrides` + non-OpenShift | **FAILS** — stuck Progressing condition | **WORKS** — metadata provider applies override |
+| Karpenter controller + any override config | **FAILS** — bare provider, no overrides | **WORKS** — full decorator chain |
+| Karpenter ignition + `--registry-overrides` (native path) | **BROKEN** — `RegistryOverrides: nil` | **WORKS** — field populated |
 | GA release + `--registry-overrides` (no matching entry) | Works (public access) | Works (unchanged — no override match) |
 | Any release + ICSP/IDMS on OpenShift cluster | Works (outer decorator handles) | Works (unchanged — outer decorator runs first) |
 | Any release + no overrides configured | Works | Works (unchanged — empty map, no replacements) |
@@ -246,11 +377,15 @@ This is a **pre-existing limitation** — the same non-determinism exists in the
 
 **No mitigation in this epic.** If this needs to be addressed, it should be a separate effort that sorts map keys by specificity (longest prefix first) across both code paths.
 
-### Known limitation: Direct `RegistryClientProvider` usages
+### Known limitation: CLI `nodepool create` bare provider
 
-Seven call sites instantiate `RegistryClientProvider` directly, bypassing the decorator chain (see "Direct `RegistryClientProvider` Usages" table in Components and Interfaces). Two are production code paths (`karpenter-operator/main.go:130` and `cmd/nodepool/core/create.go:82`) with the same class of bug. These are **explicitly out of scope** for this epic.
+`cmd/nodepool/core/create.go:82` instantiates `RegistryClientProvider` directly for version compatibility checking. This is a lower-priority production path (CLI validation, not reconciler hot path) and is **out of scope** for this epic.
 
-**Mitigation:** A follow-up issue will be filed to wrap the two production-path direct usages in the decorator chain after this fix lands.
+**Mitigation:** A follow-up issue will be filed to wrap this usage in the decorator chain.
+
+### Known limitation: E2E test bare providers
+
+Five E2E test files instantiate `RegistryClientProvider` directly. These run in controlled environments with direct registry access and are **out of scope**.
 
 ---
 
@@ -274,3 +409,42 @@ The override only replaces the registry portion of the image reference. The imag
 - No new configuration inputs — uses the existing `--registry-overrides` flag
 - No new permissions required — the mirror registry credentials should already be in the pull secret
 - No credential leakage — pull secrets are not logged or exposed differently
+
+---
+
+## Follow-up: Unified Registry Override Abstraction
+
+This epic fixes the immediate gaps with targeted patches. A follow-up epic should design a **unified override abstraction** to eliminate this class of bugs permanently.
+
+### Problem Statement
+
+Today there are two independent override mechanisms with different data structures, semantics, and coverage:
+
+| | `--registry-overrides` | ICSP/IDMS |
+|---|---|---|
+| Data structure | `map[string]string` | `map[string][]string` |
+| Semantics | Simple `strings.Replace` | Ordered mirror list, availability probing, caching, fallback |
+| Release info path | `RegistryMirrorProviderDecorator` (inner decorator) | `ProviderWithOpenShiftImageRegistryOverridesDecorator` (outer decorator) |
+| Image metadata path | **Not supported** (fixed by this epic, but bolted-on) | Native via `SeekOverride()` |
+| Introduced | November 2021 | April 2023 |
+
+Six separate wiring sites manually construct the decorator chain (HO, CPO `cpReleaseProvider`, CPO `userReleaseProvider`, HCCO, ignition-server, karpenter-operator). Three of these (CPO, HCCO, karpenter) merge `--registry-overrides` into the ICSP/IDMS map as a workaround for the missing native support — effectively abandoning the original mechanism's semantics.
+
+### Why Unification Matters
+
+- Every new image resolution code path must remember to wire **both** mechanisms, or it silently breaks on non-OpenShift clusters
+- The merge-into-ICSP/IDMS workaround changes `--registry-overrides` semantics (adds mirror probing, 15s timeouts, availability caching) which operators may not expect
+- The dual-decorator chain is hard to reason about — the interaction between outer and inner overrides is non-obvious
+- The OLM catalogs have a **third** override entry point (via HCP annotation) that follows yet another pattern
+
+### Scope for Follow-up Design
+
+The follow-up design session should evaluate:
+
+1. Whether to unify into a single abstraction or keep the mechanisms separate with consistent coverage
+2. How to handle the semantic differences (simple replacement vs. mirror probing with fallback)
+3. The serialization/deserialization round-trip through env vars and CLI flags across HO -> CPO -> HCCO -> ignition-server
+4. Impact on the 6 wiring sites, 2 decorator types, mock/test infrastructure, and the OLM catalog path
+5. Whether to split across multiple upstream PRs or land as one refactor
+
+This should be its own epic with a dedicated design session — it is architecturally significant and touches 5 binaries across ~15 files.
