@@ -8,6 +8,8 @@
 
 ## TL;DR
 
+![it was dns](https://i.imgflip.com/apshsq.jpg)
+
 ### Root Cause
 
 The management cluster (`hypershift-ci-3`) has two NodePools:
