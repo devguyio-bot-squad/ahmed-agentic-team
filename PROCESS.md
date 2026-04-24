@@ -56,6 +56,7 @@ Labels are used as modifiers on any issue type, not for classification:
 | `kind/docs` | Routes the issue to content writer hats for documentation work |
 | `role/*` | Assigns the issue to a specific role |
 | `project/<project>` | Associates the issue with a specific project. Every issue MUST have exactly one `project/<project>` label. |
+| `assignee/<name>` | Routes and prioritizes an issue for a specific member (e.g., `assignee/bob`). Issues with this label are picked up first by the matching member's board scanner. Uses the member's short name from `botminter.yml`, not the role-prefixed directory name. |
 
 ---
 

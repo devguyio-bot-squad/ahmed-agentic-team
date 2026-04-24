@@ -70,7 +70,14 @@ Use `$(date -u +%Y-%m-%dT%H:%M:%SZ)` for all timestamps.
 2026-03-02T10:15:01Z — board.scan — END
 ```
 
-### 7. Dispatch
+### 7. Assignee Label Priority
+
+Before applying the dispatch table, check each actionable item for an
+`assignee/<name>` label. Items labeled `assignee/kevin` are prioritized
+above unlabeled items. Within the labeled group, the normal priority
+table still applies. Unlabeled items are dispatched after all labeled items.
+
+### 8. Dispatch
 
 Dispatch based on the `cos:exec:*` status found. Process one item at a time.
 

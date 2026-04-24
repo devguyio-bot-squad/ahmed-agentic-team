@@ -98,7 +98,18 @@ Auto-advance: eng:arch:sign-off → snt:gate:merge
 After auto-advancing all eligible issues, continue to dispatch with the
 updated board state.
 
-### 8. Dispatch
+### 8. Assignee Label Priority
+
+Before applying the dispatch tables, check each actionable item for an
+`assignee/<name>` label. Items labeled `assignee/bob` are prioritized
+above unlabeled items. Within the labeled group, the normal priority
+tables still apply. Unlabeled items are dispatched after all labeled items.
+
+In other words: partition actionable items into two groups —
+(1) items with `assignee/bob`, (2) everything else — then apply the
+dispatch tables within each group in order.
+
+### 9. Dispatch
 
 Dispatch based on the highest-priority project status found. Process one
 item at a time. Match each item's status against the tables below in order:
