@@ -23,6 +23,15 @@ labels:
 - name: project/<project>
   color: '0E8A16'
   description: Associates issue with a project (template — actual label uses project name)
+- name: assignee/bob
+  color: '1D76DB'
+  description: Routes issue to engineer bob
+- name: assignee/kevin
+  color: '1D76DB'
+  description: Routes issue to chief-of-staff kevin
+- name: assignee/tom
+  color: '1D76DB'
+  description: Routes issue to sentinel tom
 statuses:
 - name: eng:po:triage
   description: New epic, awaiting evaluation
